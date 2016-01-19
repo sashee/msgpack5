@@ -548,6 +548,24 @@ module.exports = function buildEncode(encodingTypes, forceFloat64) {
       }
 
       buf = bl([buf, obj])
+    } else if (ArrayBuffer.isView(obj)) {
+      if (obj.byteLength <= 0xff) {
+        buf = new Buffer(2)
+        buf[0] = 0xc4
+        buf.writeUInt8(obj.byteLength, 1)
+      } else if (obj.byteLength <= 0xffff) {
+        buf = new Buffer(3)
+        buf[0] = 0xc5
+        buf.writeUInt16BE(obj.byteLength, 1)
+      } else {
+        buf = new Buffer(5)
+        buf[0] = 0xc6
+        buf.writeUInt32BE(obj.byteLength, 1)
+      }
+      buf = obj.reduce(function(acc, obj) {
+        acc.append(encode(obj, true))
+        return acc
+      }, bl().append(buf))
     } else if (Array.isArray(obj)) {
       if (obj.length < 16) {
         buf = new Buffer(1)
@@ -853,7 +871,7 @@ Decoder.prototype._transform = function (buf, enc, done) {
 module.exports.decoder = Decoder
 module.exports.encoder = Encoder
 
-},{"bl":7,"inherits":13,"readable-stream":25}],5:[function(require,module,exports){
+},{"bl":7,"inherits":14,"readable-stream":25}],5:[function(require,module,exports){
 // http://wiki.commonjs.org/wiki/Unit_Testing/1.0
 //
 // THIS IS NOT TESTED NOR LIKELY TO WORK OUTSIDE V8!
@@ -1396,6 +1414,11 @@ BufferList.prototype.append = function (buf) {
   var isBuffer = Buffer.isBuffer(buf) ||
                  buf instanceof BufferList
 
+  // coerce number arguments to strings, since Buffer(number) does
+  // uninitialized memory allocation
+  if (typeof buf == 'number')
+    buf = buf.toString()
+
   this._bufs.push(isBuffer ? buf : new Buffer(buf))
   this.length += buf.length
   return this
@@ -1572,9 +1595,11 @@ module.exports = BufferList
  */
 /* eslint-disable no-proto */
 
+'use strict'
+
 var base64 = require('base64-js')
 var ieee754 = require('ieee754')
-var isArray = require('is-array')
+var isArray = require('isarray')
 
 exports.Buffer = Buffer
 exports.SlowBuffer = SlowBuffer
@@ -1654,8 +1679,10 @@ function Buffer (arg) {
     return new Buffer(arg)
   }
 
-  this.length = 0
-  this.parent = undefined
+  if (!Buffer.TYPED_ARRAY_SUPPORT) {
+    this.length = 0
+    this.parent = undefined
+  }
 
   // Common case.
   if (typeof arg === 'number') {
@@ -1786,6 +1813,10 @@ function fromJsonObject (that, object) {
 if (Buffer.TYPED_ARRAY_SUPPORT) {
   Buffer.prototype.__proto__ = Uint8Array.prototype
   Buffer.__proto__ = Uint8Array
+} else {
+  // pre-set for values that may exist in the future
+  Buffer.prototype.length = undefined
+  Buffer.prototype.parent = undefined
 }
 
 function allocate (that, length) {
@@ -1935,10 +1966,6 @@ function byteLength (string, encoding) {
   }
 }
 Buffer.byteLength = byteLength
-
-// pre-set for values that may exist in the future
-Buffer.prototype.length = undefined
-Buffer.prototype.parent = undefined
 
 function slowToString (encoding, start, end) {
   var loweredCase = false
@@ -3031,7 +3058,7 @@ function utf8ToBytes (string, units) {
       }
 
       // valid surrogate pair
-      codePoint = leadSurrogate - 0xD800 << 10 | codePoint - 0xDC00 | 0x10000
+      codePoint = (leadSurrogate - 0xD800 << 10 | codePoint - 0xDC00) + 0x10000
     } else if (leadSurrogate) {
       // valid bmp char, but last char was a lead
       if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
@@ -3110,7 +3137,14 @@ function blitBuffer (src, dst, offset, length) {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"base64-js":6,"ieee754":12,"is-array":14}],10:[function(require,module,exports){
+},{"base64-js":6,"ieee754":13,"isarray":10}],10:[function(require,module,exports){
+var toString = {}.toString;
+
+module.exports = Array.isArray || function (arr) {
+  return toString.call(arr) == '[object Array]';
+};
+
+},{}],11:[function(require,module,exports){
 (function (Buffer){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -3135,8 +3169,12 @@ function blitBuffer (src, dst, offset, length) {
 
 // NOTE: These type checking functions intentionally don't use `instanceof`
 // because it is fragile and can be easily faked with `Object.create()`.
-function isArray(ar) {
-  return Array.isArray(ar);
+
+function isArray(arg) {
+  if (Array.isArray) {
+    return Array.isArray(arg);
+  }
+  return objectToString(arg) === '[object Array]';
 }
 exports.isArray = isArray;
 
@@ -3176,7 +3214,7 @@ function isUndefined(arg) {
 exports.isUndefined = isUndefined;
 
 function isRegExp(re) {
-  return isObject(re) && objectToString(re) === '[object RegExp]';
+  return objectToString(re) === '[object RegExp]';
 }
 exports.isRegExp = isRegExp;
 
@@ -3186,13 +3224,12 @@ function isObject(arg) {
 exports.isObject = isObject;
 
 function isDate(d) {
-  return isObject(d) && objectToString(d) === '[object Date]';
+  return objectToString(d) === '[object Date]';
 }
 exports.isDate = isDate;
 
 function isError(e) {
-  return isObject(e) &&
-      (objectToString(e) === '[object Error]' || e instanceof Error);
+  return (objectToString(e) === '[object Error]' || e instanceof Error);
 }
 exports.isError = isError;
 
@@ -3211,16 +3248,14 @@ function isPrimitive(arg) {
 }
 exports.isPrimitive = isPrimitive;
 
-function isBuffer(arg) {
-  return Buffer.isBuffer(arg);
-}
-exports.isBuffer = isBuffer;
+exports.isBuffer = Buffer.isBuffer;
 
 function objectToString(o) {
   return Object.prototype.toString.call(o);
 }
+
 }).call(this,{"isBuffer":require("../../is-buffer/index.js")})
-},{"../../is-buffer/index.js":15}],11:[function(require,module,exports){
+},{"../../is-buffer/index.js":15}],12:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -3523,7 +3558,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],12:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
   var eLen = nBytes * 8 - mLen - 1
@@ -3609,7 +3644,7 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}],13:[function(require,module,exports){
+},{}],14:[function(require,module,exports){
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -3633,41 +3668,6 @@ if (typeof Object.create === 'function') {
     ctor.prototype.constructor = ctor
   }
 }
-
-},{}],14:[function(require,module,exports){
-
-/**
- * isArray
- */
-
-var isArray = Array.isArray;
-
-/**
- * toString
- */
-
-var str = Object.prototype.toString;
-
-/**
- * Whether or not the given `val`
- * is an array.
- *
- * example:
- *
- *        isArray([]);
- *        // > true
- *        isArray(arguments);
- *        // > false
- *        isArray('');
- *        // > false
- *
- * @param {mixed} val
- * @return {bool}
- */
-
-module.exports = isArray || function (val) {
-  return !! val && '[object Array]' == str.call(val);
-};
 
 },{}],15:[function(require,module,exports){
 /**
@@ -3696,7 +3696,14 @@ module.exports = Array.isArray || function (arr) {
 },{}],17:[function(require,module,exports){
 (function (process){
 'use strict';
-module.exports = nextTick;
+
+if (!process.version ||
+    process.version.indexOf('v0.') === 0 ||
+    process.version.indexOf('v1.') === 0 && process.version.indexOf('v1.8.') !== 0) {
+  module.exports = nextTick;
+} else {
+  module.exports = process.nextTick;
+}
 
 function nextTick(fn) {
   var args = new Array(arguments.length - 1);
@@ -3890,7 +3897,7 @@ function forEach (xs, f) {
   }
 }
 
-},{"./_stream_readable":22,"./_stream_writable":24,"core-util-is":10,"inherits":13,"process-nextick-args":17}],21:[function(require,module,exports){
+},{"./_stream_readable":22,"./_stream_writable":24,"core-util-is":11,"inherits":14,"process-nextick-args":17}],21:[function(require,module,exports){
 // a passthrough stream.
 // basically just the most minimal sort of Transform stream.
 // Every written chunk gets output as-is.
@@ -3919,7 +3926,7 @@ PassThrough.prototype._transform = function(chunk, encoding, cb) {
   cb(null, chunk);
 };
 
-},{"./_stream_transform":23,"core-util-is":10,"inherits":13}],22:[function(require,module,exports){
+},{"./_stream_transform":23,"core-util-is":11,"inherits":14}],22:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -3984,8 +3991,9 @@ var StringDecoder;
 
 util.inherits(Readable, Stream);
 
+var Duplex;
 function ReadableState(options, stream) {
-  var Duplex = require('./_stream_duplex');
+  Duplex = Duplex || require('./_stream_duplex');
 
   options = options || {};
 
@@ -4051,8 +4059,9 @@ function ReadableState(options, stream) {
   }
 }
 
+var Duplex;
 function Readable(options) {
-  var Duplex = require('./_stream_duplex');
+  Duplex = Duplex || require('./_stream_duplex');
 
   if (!(this instanceof Readable))
     return new Readable(options);
@@ -4896,7 +4905,7 @@ function indexOf (xs, x) {
 }
 
 }).call(this,require('_process'))
-},{"./_stream_duplex":20,"_process":18,"buffer":9,"core-util-is":10,"events":11,"inherits":13,"isarray":16,"process-nextick-args":17,"string_decoder/":26,"util":8}],23:[function(require,module,exports){
+},{"./_stream_duplex":20,"_process":18,"buffer":9,"core-util-is":11,"events":12,"inherits":14,"isarray":16,"process-nextick-args":17,"string_decoder/":26,"util":8}],23:[function(require,module,exports){
 // a transform stream is a readable/writable stream where you do
 // something with the data.  Sometimes it's called a "filter",
 // but that's not a great name for it, since that implies a thing where
@@ -5095,7 +5104,7 @@ function done(stream, er) {
   return stream.push(null);
 }
 
-},{"./_stream_duplex":20,"core-util-is":10,"inherits":13}],24:[function(require,module,exports){
+},{"./_stream_duplex":20,"core-util-is":11,"inherits":14}],24:[function(require,module,exports){
 // A bit simpler than readable streams.
 // Implement an async ._write(chunk, encoding, cb), and it'll handle all
 // the drain event emission and buffering.
@@ -5153,8 +5162,9 @@ function WriteReq(chunk, encoding, cb) {
   this.next = null;
 }
 
+var Duplex;
 function WritableState(options, stream) {
-  var Duplex = require('./_stream_duplex');
+  Duplex = Duplex || require('./_stream_duplex');
 
   options = options || {};
 
@@ -5262,8 +5272,9 @@ Object.defineProperty(WritableState.prototype, 'buffer', {
 }catch(_){}}());
 
 
+var Duplex;
 function Writable(options) {
-  var Duplex = require('./_stream_duplex');
+  Duplex = Duplex || require('./_stream_duplex');
 
   // Writable ctor is applied to Duplexes, though they're not
   // instanceof Writable, they're instanceof Readable.
@@ -5624,7 +5635,7 @@ function endWritable(stream, state, cb) {
   state.ended = true;
 }
 
-},{"./_stream_duplex":20,"buffer":9,"core-util-is":10,"events":11,"inherits":13,"process-nextick-args":17,"util-deprecate":27}],25:[function(require,module,exports){
+},{"./_stream_duplex":20,"buffer":9,"core-util-is":11,"events":12,"inherits":14,"process-nextick-args":17,"util-deprecate":27}],25:[function(require,module,exports){
 var Stream = (function (){
   try {
     return require('st' + 'ream'); // hack to fix a circular dependency issue when used with browserify
@@ -6529,5 +6540,5 @@ function hasOwnProperty(obj, prop) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":28,"_process":18,"inherits":13}]},{},[1])(1)
+},{"./support/isBuffer":28,"_process":18,"inherits":14}]},{},[1])(1)
 });
